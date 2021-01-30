@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"time"
+
+	es "github.com/nknorg/encrypted-stream"
 )
 
 func Socks5Auth(userClient net.Conn) (err error) {
@@ -15,44 +16,50 @@ func Socks5Auth(userClient net.Conn) (err error) {
 	// 读取 VER 和 NMETHODS
 	n, err := io.ReadFull(userClient, buf[:2])
 	if n != 2 {
-		return errors.New("reading header: " + err.Error())
+		return errors.New("SATH RVER    " + err.Error())
 	}
 
 	ver, nMethods := int(buf[0]), int(buf[1])
 	if ver != 5 {
-		return errors.New("invalid version")
+		return errors.New("SATH RVER    invalid version")
 	}
 
 	// 读取 METHODS 列表
 	n, err = io.ReadFull(userClient, buf[:nMethods])
 	if n != nMethods {
-		return errors.New("reading methods: " + err.Error())
+		return errors.New("SATH RMTH    " + err.Error())
 	}
 
 	//TO BE CONTINUED... //无需认证
 	n, err = userClient.Write([]byte{0x05, 0x00})
 	if n != 2 || err != nil {
-		return errors.New("write rsp err: " + err.Error())
+		return errors.New("SATH WRTE    " + err.Error())
 	}
 
 	return nil
 }
 
-func Socks5Connect(client net.Conn, remoteAddr string) (net.Conn, *Cipher, error) {
+func Socks5Connect(client net.Conn, remoteAddr string) (*es.EncryptedStream, error) {
 	buf := make([]byte, 256)
 	n, _ := client.Read(buf)
-	remoteConn, cipher, err := SDail(buf[:n], remoteAddr)
+	eRConn, err := SDail(buf[:n], remoteAddr)
+	if err != nil {
+		// fmt.Println("Socks5Connect SDail ERR:", err)
+		return nil, err
+	}
 	_, err = client.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 	if err != nil {
-		remoteConn.Close()
-		return nil, nil, errors.New("write rsp: " + err.Error())
+		// fmt.Println("Socks5Connect Write userConn ERR:", err)
+		err = errors.New("SCON WRTE    " + err.Error())
+		eRConn.Close()
+		return nil, err
 	}
-	return remoteConn, cipher, nil
+	return eRConn, nil
 }
 
-func Socks5Forward(srcConn net.Conn, dstConn net.Conn, cipher *Cipher) {
-	go cipher.DecodeCopy(dstConn, srcConn)
-	cipher.EncodeCopy(srcConn, dstConn)
+func Socks5Forward(srcConn net.Conn, dstConn *es.EncryptedStream) {
+	go io.Copy(srcConn, dstConn)
+	io.Copy(dstConn, srcConn)
 }
 
 func Socks5DestAddrPort(buf []byte) (destAddrPort string, err error) {
@@ -79,7 +86,9 @@ func Socks5DestAddrPort(buf []byte) (destAddrPort string, err error) {
 		addr = string(buf[5 : n-2])
 	case 0x04:
 		//	IP V6 address: X'04'
-		return "", errors.New("IPv6: no supported yet")
+		var ip net.IP
+		ip = buf[4 : 4+net.IPv6len]
+		addr = "[" + ip.String() + "]"
 	default:
 		return
 	}
@@ -88,17 +97,56 @@ func Socks5DestAddrPort(buf []byte) (destAddrPort string, err error) {
 	return destAddrPort, nil
 }
 
-func SDail(destbuf []byte, remoteAddr string) (remoteConn net.Conn, cipher *Cipher, err error) {
-	remoteConn, err = net.Dial("tcp", remoteAddr)
-	nid := NewNid(time.Now().UnixNano())
-	buf := make([]byte, 1500)
+func SDail(destbuf []byte, remoteAddr string) (*es.EncryptedStream, error) {
+	remoteConn, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		// fmt.Println("SDail Remote ERR:", err)
+		err = errors.New("SDIL DAIL    " + err.Error())
+		return nil, err
+	}
+	nid := NewNid()
+	buf := make([]byte, 1024)
 	copy(buf[:12], nid[:])
 	copy(buf[12:], destbuf)
-	data, _ := EncyptogRSA(buf[:12+len(destbuf)], "spublicKey.pem")
-	remoteConn.Write(data)
-	n, _ := remoteConn.Read(buf)
-	data, _ = DecrptogRSA(buf[:n], "cprivateKey.pem")
-	// fmt.Println(data)
-	cipher = NewCipher(data, nid)
-	return
+	data, err := EncyptogRSA(buf[:12+len(destbuf)], "spublicKey.pem")
+	if err != nil {
+		// fmt.Println("SDail Encypt ERR:", err)
+		err = errors.New("SDIL ENPT    " + err.Error())
+		remoteConn.Close()
+		return nil, err
+	}
+	_, err = remoteConn.Write(data)
+	if err != nil {
+		// fmt.Println("SDail Remote first Write ERR:", err)
+		err = errors.New("SDIL WRTE    " + err.Error())
+		remoteConn.Close()
+		return nil, err
+	}
+	n, err := remoteConn.Read(buf)
+	if err != nil {
+		if err == io.EOF {
+			err = errors.New("Server Refuse This Dst buf")
+		}
+		// fmt.Println("SDail Remote first Read ERR:", err)
+		err = errors.New("SDIL READ    " + err.Error())
+		remoteConn.Close()
+		return nil, err
+	}
+	data, err = DecrptogRSA(buf[:n], "cprivateKey.pem")
+	if err != nil {
+		// fmt.Println("SDail Decrpt ERR:", err)
+		err = errors.New("SDIL DEPT    " + err.Error())
+		remoteConn.Close()
+		return nil, err
+	}
+	var key [32]byte
+	copy(key[:], data)
+	config := &es.Config{
+		Cipher: es.NewXSalsa20Poly1305Cipher(&key),
+	}
+	encryptedConn, err := es.NewEncryptedStream(remoteConn, config)
+	if err != nil {
+		panic(err)
+	}
+	return encryptedConn, nil
 }

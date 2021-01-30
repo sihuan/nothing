@@ -1,7 +1,8 @@
 package client
 
 import (
-	"log"
+	"fmt"
+	"io"
 	"net"
 
 	"github.com/Si-Huan/nothing/common"
@@ -27,7 +28,7 @@ func (s *Server) Start() {
 	for {
 		userConn, err := listener.Accept()
 		if err != nil {
-			log.Println(err)
+			fmt.Println("CLET ACPT    :", err)
 			continue
 		}
 
@@ -36,7 +37,20 @@ func (s *Server) Start() {
 }
 
 func (s *Server) handleConn(userConn net.Conn) {
-	common.Socks5Auth(userConn)
-	remoteConn, cipher, _ := common.Socks5Connect(userConn, s.parent.RemoteAddr)
-	common.Socks5Forward(userConn, remoteConn, cipher)
+	defer fmt.Println("Close")
+	defer userConn.Close()
+	err := common.Socks5Auth(userConn)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	eRConn, err := common.Socks5Connect(userConn, s.parent.RemoteAddr)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	defer eRConn.Close()
+	go io.Copy(userConn, eRConn)
+	io.Copy(eRConn, userConn)
+
 }

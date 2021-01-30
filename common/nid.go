@@ -12,16 +12,14 @@ func (n *Nid) UnixNano() int64 {
 	return BytesToInt64(n[:8])
 }
 
-func NewNid(seed int64) Nid {
+func NewNid() Nid {
 	var n Nid
-
-	rand.Seed(seed)
 	token := make([]byte, 4)
 	rand.Read(token)
 	timeUnixNano := time.Now().UnixNano()
 	buf := make([]byte, 12)
 	buf = append(Int64ToBytes(timeUnixNano), token...)
-	copy(n[:], buf)
+	copy(n[:], buf[:12])
 	return n
 }
 
