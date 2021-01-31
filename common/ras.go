@@ -25,7 +25,7 @@ func RSAGenKey(bits int, who string) error {
 		Bytes: privateStream,
 	}
 	//4、通过pem将设置的数据进行编码，并写入磁盘文件
-	fPrivate, err := os.Create(who + "privateKey.pem")
+	fPrivate, err := os.Create(who + ".key")
 	if err != nil {
 		return err
 	}
@@ -45,7 +45,7 @@ func RSAGenKey(bits int, who string) error {
 		Type:  "public key",
 		Bytes: publicStream,
 	}
-	fPublic, err := os.Create(who + "publicKey.pem")
+	fPublic, err := os.Create(who + ".pub")
 	if err != nil {
 		return err
 	}
@@ -55,13 +55,19 @@ func RSAGenKey(bits int, who string) error {
 }
 
 //EncyptogRSA 对数据进行加密操作
-func EncyptogRSA(src []byte, path string) (res []byte, err error) {
+func EncyptogRSA(src []byte, publicKey *rsa.PublicKey) (res []byte, err error) {
+	res, err = rsa.EncryptPKCS1v15(rand.Reader, publicKey, src)
+	return
+}
+
+func LoadPublicKey(path string) (publicKey *rsa.PublicKey, err error) {
 	//1.获取秘钥（从本地磁盘读取）
 	f, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+
 	fileInfo, _ := f.Stat()
 	b := make([]byte, fileInfo.Size())
 	f.Read(b)
@@ -76,24 +82,27 @@ func EncyptogRSA(src []byte, path string) (res []byte, err error) {
 		return
 	}
 	//4.使用公钥加密数据
-	pubKey := keyInit.(*rsa.PublicKey)
-	res, err = rsa.EncryptPKCS1v15(rand.Reader, pubKey, src)
+	publicKey = keyInit.(*rsa.PublicKey)
 	return
 }
 
 //DecrptogRSA 对数据进行解密操作
-func DecrptogRSA(src []byte, path string) (res []byte, err error) {
-	//1.获取秘钥（从本地磁盘读取）
+func DecrptogRSA(src []byte, privateKey *rsa.PrivateKey) (res []byte, err error) {
+	res, err = rsa.DecryptPKCS1v15(rand.Reader, privateKey, src)
+	return
+}
+
+func LoadPrivateKey(path string) (privateKey *rsa.PrivateKey, err error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
 	}
 	defer f.Close()
+
 	fileInfo, _ := f.Stat()
 	b := make([]byte, fileInfo.Size())
 	f.Read(b)
-	block, _ := pem.Decode(b)                                 //解码
-	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes) //还原数据
-	res, err = rsa.DecryptPKCS1v15(rand.Reader, privateKey, src)
+	block, _ := pem.Decode(b)
+	privateKey, err = x509.ParsePKCS1PrivateKey(block.Bytes)
 	return
 }

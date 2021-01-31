@@ -1,8 +1,16 @@
 #!/usr/bin/bash
 
-cd server
-go build -o ../build/server
+os=linux
+for arch in "amd64" "386" "mips64" "mips64le" "arm" "arm64";do
+    CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -o build/nothing_linux_$arch
+done
 
-cd ../client
+os=darwin
+for arch in "amd64";do
+    CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -o build/nothing_darwin_$arch
+done
 
-go build -o ../build/client
+os=windows
+for arch in "amd64" "386" "arm";do
+    GOEXE=.exe CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -o build/nothing_windows_$arch
+done
